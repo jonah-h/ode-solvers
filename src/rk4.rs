@@ -4,7 +4,7 @@ use crate::dop_shared::{IntegrationError, Stats, System};
 
 use nalgebra::{allocator::Allocator, DefaultAllocator, Dim, OVector, Scalar};
 use num_traits::Zero;
-use simba::scalar::{ClosedAdd, ClosedMul, ClosedNeg, ClosedSub, SubsetOf};
+use simba::scalar::{ClosedAdd, ClosedMul, ClosedNeg, ClosedSub};
 
 /// Structure containing the parameters for the numerical integration.
 pub struct Rk4<V, F>
@@ -24,10 +24,8 @@ where
 
 impl<T, D: Dim, F> Rk4<OVector<T, D>, F>
 where
-    f64: From<T>,
-    T: Copy + SubsetOf<f64> + Scalar + ClosedAdd + ClosedMul + ClosedSub + ClosedNeg + Zero,
+    T: Copy + Scalar + ClosedAdd + ClosedMul + ClosedSub + ClosedNeg + Zero + From<f64>,
     F: System<OVector<T, D>>,
-    OVector<T, D>: std::ops::Mul<f64, Output = OVector<T, D>>,
     DefaultAllocator: Allocator<T, D>,
 {
     /// Default initializer for the structure
@@ -84,24 +82,24 @@ where
         self.f.system(self.x, &self.y, &mut k[0]);
         self.f.system(
             self.x + self.half_step,
-            &(self.y.clone() + k[0].clone() * self.half_step),
+            &(self.y.clone() + k[0].clone() * T::from(self.half_step)),
             &mut k[1],
         );
         self.f.system(
             self.x + self.half_step,
-            &(self.y.clone() + k[1].clone() * self.half_step),
+            &(self.y.clone() + k[1].clone() * T::from(self.half_step)),
             &mut k[2],
         );
         self.f.system(
             self.x + self.step_size,
-            &(self.y.clone() + k[2].clone() * self.step_size),
+            &(self.y.clone() + k[2].clone() * T::from(self.step_size)),
             &mut k[3],
         );
 
         let x_new = self.x + self.step_size;
         let y_new = &self.y
-            + (k[0].clone() + k[1].clone() * 2.0 + k[2].clone() * 2.0 + k[3].clone())
-                * (self.step_size / 6.0);
+            + (k[0].clone() + k[1].clone() * T::from(2.0) + k[2].clone() * T::from(2.0) + k[3].clone())
+                * T::from(self.step_size / 6.0);
         (x_new, y_new)
     }
 
@@ -120,7 +118,7 @@ where
 mod tests {
     use crate::rk4::Rk4;
     use crate::{DVector, OVector, System, Vector1};
-    use nalgebra::{allocator::Allocator, DefaultAllocator, Dim};
+    use nalgebra::{allocator::Allocator, Complex, ComplexField, DefaultAllocator, Dim};
 
     struct Test1 {}
     impl<D: Dim> System<OVector<f64, D>> for Test1
@@ -149,6 +147,16 @@ mod tests {
     {
         fn system(&self, x: f64, y: &OVector<f64, D>, dy: &mut OVector<f64, D>) {
             dy[0] = (5. * x * x - y[0]) / (x + y[0]).exp();
+        }
+    }
+
+    struct Test4 {}
+    impl<D: Dim> System<OVector<Complex<f64>, D>> for Test4
+    where
+        DefaultAllocator: Allocator<Complex<f64>, D>,
+    {
+        fn system(&self, x: f64, y: &OVector<Complex<f64>, D>, dy: &mut OVector<Complex<f64>, D>) {
+            dy[0] = (x - y[0]) / 2.;
         }
     }
 
@@ -188,6 +196,18 @@ mod tests {
     }
 
     #[test]
+    fn test_integrate_test4_svector() {
+        let system = Test4 {};
+        let mut stepper = Rk4::new(system, 0., Vector1::new(Complex::new(1., 0.)), 0.2, 0.1);
+        let _ = stepper.integrate();
+        let x_out = stepper.x_out();
+        let y_out = stepper.y_out();
+        assert!((*x_out.last().unwrap() - 0.2).abs() < 1.0E-8);
+        assert!((&y_out[1][0] - 0.95369).abs() < 1.0E-5);
+        assert!((&y_out[2][0] - 0.91451).abs() < 1.0E-5);
+    }
+
+    #[test]
     fn test_integrate_test1_dvector() {
         let system = Test1 {};
         let mut stepper = Rk4::new(system, 0., DVector::from(vec![1.]), 0.2, 0.1);
@@ -220,5 +240,17 @@ mod tests {
         assert!((&out[5][0] - 0.913059839).abs() < 1.0E-9);
         assert!((&out[8][0] - 0.9838057659).abs() < 1.0E-9);
         assert!((&out[10][0] - 1.0715783953).abs() < 1.0E-9);
+    }
+
+    #[test]
+    fn test_integrate_test4_dvector() {
+        let system = Test4 {};
+        let mut stepper = Rk4::new(system, 0., DVector::from(vec![Complex::new(1., 0.)]), 0.2, 0.1);
+        let _ = stepper.integrate();
+        let x_out = stepper.x_out();
+        let y_out = stepper.y_out();
+        assert!((*x_out.last().unwrap() - 0.2).abs() < 1.0E-8);
+        assert!((&y_out[1][0] - 0.95369).abs() < 1.0E-5);
+        assert!((&y_out[2][0] - 0.91451).abs() < 1.0E-5);
     }
 }
